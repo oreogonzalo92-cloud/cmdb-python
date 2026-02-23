@@ -3,7 +3,6 @@
 
 Detecta:
 - IDs duplicados dentro de cada archivo.
-- Campos vacíos en columnas seleccionadas (prioridad en archivo 1).
 - Caracteres no permitidos en una o varias columnas de texto.
 - Posibles errores de codificación (mojibake), ej: "fantasÃ­a".
 - Novedades entre dos archivos cuando el ID es igual pero el nombre cambia.
@@ -28,8 +27,6 @@ MOJIBAKE_PATTERN = re.compile(r"(Ã.|Â.|\uFFFD)")
 class AuditResult:
     duplicates_left: pd.DataFrame
     duplicates_right: pd.DataFrame
-    empty_required_left: pd.DataFrame
-    empty_required_right: pd.DataFrame
     invalid_chars_left: pd.DataFrame
     invalid_chars_right: pd.DataFrame
     mojibake_left: pd.DataFrame
@@ -42,8 +39,6 @@ class AuditResult:
         return {
             "duplicados_archivo_1": len(self.duplicates_left),
             "duplicados_archivo_2": len(self.duplicates_right),
-            "campos_vacios_obligatorios_archivo_1": len(self.empty_required_left),
-            "campos_vacios_obligatorios_archivo_2": len(self.empty_required_right),
             "texto_con_caracteres_invalidos_archivo_1": len(self.invalid_chars_left),
             "texto_con_caracteres_invalidos_archivo_2": len(self.invalid_chars_right),
             "posible_mojibake_archivo_1": len(self.mojibake_left),
@@ -68,27 +63,6 @@ def validate_columns(df: pd.DataFrame, required_cols: list[str], source_name: st
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         raise ValueError(f"En {source_name} faltan columnas requeridas: {missing}")
-
-
-def is_blank(value: object) -> bool:
-    return pd.isna(value) or str(value).strip() == ""
-
-
-def find_empty_required_fields(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    records: list[dict] = []
-
-    for idx, row in df.iterrows():
-        for col in cols:
-            if is_blank(row.get(col)):
-                records.append(
-                    {
-                        "fila_excel": idx + 2,
-                        "columna": col,
-                        "valor": row.get(col),
-                    }
-                )
-
-    return pd.DataFrame(records)
 
 
 def find_duplicates(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
@@ -178,7 +152,6 @@ def run_audit(
     id_col: str,
     name_col: str,
     text_check_cols: list[str],
-    required_cols: list[str],
     allowed_name_regex: str = DEFAULT_ALLOWED_NAME_REGEX,
     sheet_left: str | int = 0,
     sheet_right: str | int = 0,
@@ -186,15 +159,11 @@ def run_audit(
     left = load_excel(file_left, sheet_left)
     right = load_excel(file_right, sheet_right)
 
-    all_required_for_schema = [id_col, name_col] + text_check_cols + required_cols
-    validate_columns(left, all_required_for_schema, source_name=file_left)
-    validate_columns(right, all_required_for_schema, source_name=file_right)
+    validate_columns(left, [id_col, name_col] + text_check_cols, source_name=file_left)
+    validate_columns(right, [id_col, name_col] + text_check_cols, source_name=file_right)
 
     duplicates_left = find_duplicates(left, id_col)
     duplicates_right = find_duplicates(right, id_col)
-
-    empty_required_left = find_empty_required_fields(left, required_cols)
-    empty_required_right = find_empty_required_fields(right, required_cols)
 
     invalid_chars_left = find_invalid_chars_in_columns(left, text_check_cols, allowed_name_regex)
     invalid_chars_right = find_invalid_chars_in_columns(right, text_check_cols, allowed_name_regex)
@@ -207,8 +176,6 @@ def run_audit(
     return AuditResult(
         duplicates_left=duplicates_left,
         duplicates_right=duplicates_right,
-        empty_required_left=empty_required_left,
-        empty_required_right=empty_required_right,
         invalid_chars_left=invalid_chars_left,
         invalid_chars_right=invalid_chars_right,
         mojibake_left=mojibake_left,
@@ -222,9 +189,7 @@ def run_audit(
 def save_report(result: AuditResult, output_path: str) -> None:
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         pd.DataFrame([result.to_summary()]).to_excel(writer, sheet_name="resumen", index=False)
-        result.empty_required_left.to_excel(writer, sheet_name="vacios_obligatorios_archivo_1", index=False)
         result.duplicates_left.to_excel(writer, sheet_name="duplicados_archivo_1", index=False)
-        result.empty_required_right.to_excel(writer, sheet_name="vacios_obligatorios_archivo_2", index=False)
         result.duplicates_right.to_excel(writer, sheet_name="duplicados_archivo_2", index=False)
         result.invalid_chars_left.to_excel(writer, sheet_name="chars_invalidos_archivo_1", index=False)
         result.invalid_chars_right.to_excel(writer, sheet_name="chars_invalidos_archivo_2", index=False)
@@ -250,11 +215,6 @@ def parse_args() -> argparse.Namespace:
         default="nombre",
         help="Columnas de texto a validar (separadas por coma)",
     )
-    parser.add_argument(
-        "--required-cols",
-        default="",
-        help="Columnas obligatorias para detectar vacíos (separadas por coma)",
-    )
     parser.add_argument("--sheet-1", default=0, help="Nombre o índice de hoja en archivo 1 (default: 0)")
     parser.add_argument("--sheet-2", default=0, help="Nombre o índice de hoja en archivo 2 (default: 0)")
     parser.add_argument(
@@ -269,7 +229,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     text_check_cols = parse_cols(args.text_check_cols)
-    required_cols = parse_cols(args.required_cols) or [args.id_col, args.name_col]
 
     result = run_audit(
         file_left=args.archivo_1,
@@ -277,7 +236,6 @@ def main() -> None:
         id_col=args.id_col,
         name_col=args.name_col,
         text_check_cols=text_check_cols,
-        required_cols=required_cols,
         allowed_name_regex=args.allowed_name_regex,
         sheet_left=args.sheet_1,
         sheet_right=args.sheet_2,
@@ -286,7 +244,6 @@ def main() -> None:
     save_report(result, args.output)
     summary = result.to_summary()
     print("Auditoría completada. Resumen:")
-    print("(Primero revisa vacíos y duplicados del archivo 1)")
     for key, value in summary.items():
         print(f"- {key}: {value}")
     print(f"Reporte generado en: {args.output}")

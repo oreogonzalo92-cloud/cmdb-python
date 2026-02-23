@@ -3,7 +3,6 @@ import pandas as pd
 from excel_audit import (
     compare_by_id_and_name,
     find_duplicates,
-    find_empty_required_fields,
     find_invalid_chars_in_columns,
     find_mojibake_in_columns,
 )
@@ -19,17 +18,6 @@ def test_find_duplicates():
     duplicates = find_duplicates(df, "id")
     assert len(duplicates) == 2
     assert set(duplicates["id"].tolist()) == {2}
-
-
-def test_find_empty_required_fields():
-    df = pd.DataFrame(
-        {
-            "RUT/NIT": ["123", "", None],
-            "Razon Social": ["Empresa A", "Empresa B", "  "],
-        }
-    )
-    missing = find_empty_required_fields(df, ["RUT/NIT", "Razon Social"])
-    assert len(missing) == 3
 
 
 def test_find_invalid_chars_in_columns():
